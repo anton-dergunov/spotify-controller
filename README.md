@@ -1,6 +1,22 @@
 # spotify-controller
 
-CLI tool for macOS that prints whether the song currently playing in the **Spotify desktop app** is in your library / liked.
+macOS Spotify helper: a **SwiftUI player UI** (menu bar app later) and a **Python CLI** for liked-state control.
+
+## macOS app (SwiftUI)
+
+Place album art at **`cover.jpg`** in this directory (repo root), then:
+
+```bash
+make run
+```
+
+See [macos/README.md](macos/README.md) and [designs/popover-ui.md](designs/popover-ui.md).
+
+---
+
+## Python CLI
+
+CLI tool that prints whether the song currently playing in the **Spotify desktop app** is in your library / liked.
 
 ## Requirements
 

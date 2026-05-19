@@ -1,1 +1,6 @@
 .venv/
+.build/
+.swiftpm/
+macos/.build/
+macos/Sources/SpotifyController/Resources/cover.jpg
+.DS_Store
