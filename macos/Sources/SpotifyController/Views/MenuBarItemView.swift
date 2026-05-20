@@ -6,8 +6,7 @@ struct MenuBarItemView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // Track info: fills all remaining width.
-            // The entire column is a tap target that opens the player window.
+            // Track info column: fills remaining width, full-height tap area.
             VStack(spacing: 1) {
                 Text(playback.artist)
                     .font(.system(size: 11, weight: .semibold))
@@ -26,35 +25,30 @@ struct MenuBarItemView: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: onOpenWindow)
 
-            // Skip button: full-height column so any click in its vertical
-            // strip registers, not just the icon itself.
-            Button {
-                playback.skipForward()
-            } label: {
-                Image(systemName: "forward.end.fill")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color(nsColor: .labelColor))
-            }
-            .buttonStyle(.plain)
-            .frame(maxHeight: .infinity)
-            .frame(width: 28)
-            .contentShape(Rectangle())
-            .accessibilityLabel("Next track")
+            // Skip column: 28 pt wide, full bar height.
+            // Using Image + onTapGesture (not Button) so that contentShape(Rectangle())
+            // reliably covers the whole strip, not just the icon's rendered pixels.
+            Image(systemName: "forward.end.fill")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color(nsColor: .labelColor))
+                .frame(maxHeight: .infinity)
+                .frame(width: 28)
+                .contentShape(Rectangle())
+                .onTapGesture { playback.skipForward() }
+                .accessibilityLabel("Next track")
+                .accessibilityAddTraits(.isButton)
 
-            // Like button: same full-height column treatment.
-            // Liked state shows a solid white heart (distinct from the outline).
-            Button {
-                playback.toggleLike()
-            } label: {
-                Image(systemName: playback.isLiked ? "heart.fill" : "heart")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(playback.isLiked ? Color.white : Color(nsColor: .labelColor))
-            }
-            .buttonStyle(.plain)
-            .frame(maxHeight: .infinity)
-            .frame(width: 28)
-            .contentShape(Rectangle())
-            .accessibilityLabel(playback.isLiked ? "Unlike" : "Like")
+            // Like column: 28 pt wide, full bar height.
+            // Liked state shows a solid white heart.
+            Image(systemName: playback.isLiked ? "heart.fill" : "heart")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(playback.isLiked ? Color.white : Color(nsColor: .labelColor))
+                .frame(maxHeight: .infinity)
+                .frame(width: 28)
+                .contentShape(Rectangle())
+                .onTapGesture { playback.toggleLike() }
+                .accessibilityLabel(playback.isLiked ? "Unlike" : "Like")
+                .accessibilityAddTraits(.isButton)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
