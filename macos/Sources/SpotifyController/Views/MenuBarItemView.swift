@@ -5,16 +5,41 @@ struct MenuBarItemView: View {
     let onOpenWindow: () -> Void
 
     var body: some View {
+        if playback.isSpotifyRunning {
+            trackInfoView
+        } else {
+            notRunningView
+        }
+    }
+
+    // MARK: - Spotify not running
+
+    private var notRunningView: some View {
+        // speaker.zzz.fill = "the speaker is sleeping" — funny, music-related,
+        // and immediately clear that something audio-adjacent is inactive.
+        Image(systemName: "speaker.zzz.fill")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(Color(nsColor: .labelColor))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture { playback.launchSpotify() }
+            .accessibilityLabel("Spotify not running — click to launch")
+            .accessibilityAddTraits(.isButton)
+    }
+
+    // MARK: - Spotify running
+
+    private var trackInfoView: some View {
         HStack(spacing: 0) {
             // Track info column: fills remaining width, full-height tap area.
             VStack(spacing: 1) {
-                Text(playback.artist)
+                Text(playback.artist.isEmpty ? "Spotify" : playback.artist)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color(nsColor: .labelColor))
                     .lineLimit(1)
                     .truncationMode(.tail)
 
-                Text(playback.song)
+                Text(playback.song.isEmpty ? "Not playing" : playback.song)
                     .font(.system(size: 10, weight: .regular))
                     .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                     .lineLimit(1)

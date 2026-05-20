@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -16,10 +17,13 @@ final class StatusBarController: NSObject {
     // focus left it (< 150 ms ago), don't reopen on the same click.
     private var lastHideTime: TimeInterval = 0
 
+    private var cancellables = Set<AnyCancellable>()
+
     override init() {
         statusItem = NSStatusBar.system.statusItem(withLength: 150)
         super.init()
         setupStatusItem()
+        observeSpotifyRunningState()
     }
 
     private func setupStatusItem() {
@@ -45,6 +49,18 @@ final class StatusBarController: NSObject {
         button.action = #selector(handleButtonAction(_:))
         button.target = self
         button.sendAction(on: [.rightMouseUp])
+    }
+
+    private func observeSpotifyRunningState() {
+        playback.$isSpotifyRunning
+            .sink { [weak self] running in
+                // 150 pt when showing track info; 32 pt for the icon-only state.
+                self?.statusItem.length = running ? 150 : 32
+                if !running {
+                    self?.hidePlayerWindow()
+                }
+            }
+            .store(in: &cancellables)
     }
 
     @objc private func handleButtonAction(_ sender: NSStatusBarButton) {
