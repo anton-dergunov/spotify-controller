@@ -8,9 +8,9 @@ enum PlayerTheme {
     static let hoverFadeDelay: Double = 0.13
     static let hoverFadeOut: Double = 0.18
 
-    static let blurRadius: CGFloat = 26
-    static let blurScale: CGFloat = 1.08
-    static let tintOpacity: Double = 0.42
+    static let blurRadius: CGFloat = 8
+    static let blurScale: CGFloat = 1.05
+    static let tintOpacity: Double = 0.20
 
     /// User-customizable later via settings.
     static let controlForeground = Color.white
