@@ -22,15 +22,22 @@ final class PlaybackViewModel: ObservableObject {
     // MARK: - UI state
 
     @Published var coverImage: NSImage?
-    @Published var showSettings = false
     @Published var isSpotifyRunning = false
 
     // MARK: - Private
 
     private let bridge = SpotifyBridge()
     private let likeService = SpotifyLikeService()
+    let authService = SpotifyAuthService()
 
     private var currentTrackId = ""
+
+    // Increments whenever the user clicks the heart button. A background
+    // fetchLikeStatus task captures this value when it starts, and refuses to
+    // overwrite `isLiked` if the counter has moved (i.e. the user clicked since).
+    // Without this, slow web responses can clobber recent user clicks and the UI
+    // bounces or lands in the wrong state.
+    private var likeActionVersion = 0
 
     private var displayTimer: AnyCancellable?
     private var positionSyncTimer: AnyCancellable?
@@ -51,6 +58,7 @@ final class PlaybackViewModel: ObservableObject {
     // MARK: - Init
 
     init() {
+        likeService.authService = authService
         wireBridge()
         isSpotifyRunning = bridge.isRunning()
         if isSpotifyRunning {
@@ -98,20 +106,21 @@ final class PlaybackViewModel: ObservableObject {
 
     func toggleLike() {
         guard !currentTrackId.isEmpty else { return }
-        // Determine the intended new state from the UI's current display.
         let wantLiked = !isLiked
-        // Optimistically update UI immediately for responsiveness.
         isLiked = wantLiked
+        likeActionVersion += 1
+        let myVersion = likeActionVersion
 
         let trackId = currentTrackId
         Task { [weak self] in
             guard let self else { return }
-            if let actual = await likeService.setLike(trackId: trackId, wantLiked: wantLiked) {
-                // Reconcile: if actual state differs (e.g. was already liked), sync UI.
+            let actual = await likeService.setLike(trackId: trackId, wantLiked: wantLiked)
+            // If the user clicked again since this task started, ignore this result.
+            guard self.likeActionVersion == myVersion else { return }
+            if let actual = actual {
                 self.isLiked = actual
             } else {
-                // Request failed — revert optimistic update.
-                self.isLiked = !wantLiked
+                self.isLiked = !wantLiked  // revert optimistic update on failure
             }
         }
     }
@@ -172,18 +181,22 @@ final class PlaybackViewModel: ObservableObject {
     }
 
     // Fetch like status (and bonus web artwork URL) for the newly-playing track.
+    // Captures `likeActionVersion` so a slow web response can't overwrite a user
+    // click that happened during the fetch.
     private func fetchLikeStatus(trackId: String) {
         guard !trackId.isEmpty else { return }
+        let versionAtStart = likeActionVersion
         Task { [weak self] in
             guard let self else { return }
             guard let result = await likeService.fetchLikeAndArtwork(trackId: trackId) else { return }
-            // Make sure the track hasn't changed while we were fetching.
             guard self.currentTrackId == trackId else { return }
-            self.isLiked = result.isLiked
-            // Store the web artwork URL for use as a fallback in artwork fetch.
+            // Only update isLiked if the user hasn't clicked the heart since this
+            // fetch started — otherwise we'd overwrite the user's intent.
+            if self.likeActionVersion == versionAtStart {
+                self.isLiked = result.isLiked
+            }
             if let url = result.artworkURL, !url.isEmpty {
                 self.webArtworkURL = url
-                // If we still don't have a cover image, try this URL now.
                 if self.coverImage == nil {
                     self.startArtworkFetch(
                         cdnURL: self.loadedArtworkURL.isEmpty ? url : self.loadedArtworkURL,

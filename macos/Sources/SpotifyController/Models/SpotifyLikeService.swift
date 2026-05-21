@@ -1,43 +1,56 @@
-import CCommonCrypto
 import Foundation
-import Security
 
 struct LikeResult {
     let isLiked: Bool
     let artworkURL: String?
 }
 
-// Handles like/unlike using the same two-phase approach as prototypes/spotify_liked.py:
-//   1. Fast path  – inject JS into an open Chrome tab on the track's page.
-//   2. Fallback   – call the Python script (which uses browser_cookie3 + playwright).
+// Native-Swift port of prototypes/spotify_liked.py.
 //
-// The get_access_token Spotify endpoint returns 403 from non-browser clients, so a
-// direct cookie→token→API chain does not work; only an actual browser (tab or headless)
-// can authenticate correctly.
+//   1. Fast path  – inject JS into an open Chrome tab on the track's page.
+//   2. WKWebView  – persistent off-screen WebKit view with the user's Chrome cookies,
+//                   navigates to the track page and reads/clicks the DOM button.
+//                   This is the native equivalent of the Python script's Playwright fallback.
+//
+// No OAuth / no Spotify Developer API:
+//   • Spotify locked down Web API access for new developer apps in Feb 2026.
+//   • The open.spotify.com/get_access_token endpoint requires a rotating TOTP
+//     (since March 2025) and cannot be called from a script.
+//   • The Spotify desktop AppleScript dictionary exposes `starred` as read-only —
+//     no way to set library status via AppleScript.
 @MainActor
 final class SpotifyLikeService {
+
+    weak var authService: SpotifyAuthService?
 
     // MARK: - Public API
 
     /// Called when a new track starts playing.
     func fetchLikeAndArtwork(trackId: String) async -> LikeResult? {
         guard !trackId.isEmpty else {
-            log("fetchLikeAndArtwork: trackId is empty, skipping")
+            log("fetchLikeAndArtwork: trackId empty, skipping")
             return nil
         }
         log("fetchLikeAndArtwork: trackId=\(trackId)")
 
-        // 1. Chrome tab fast path (zero extra network traffic)
+        // 1. Chrome tab fast path (zero extra network traffic when Chrome has the page open)
         if let r = await chromeFetchLike(trackId: trackId) {
             log("fetchLikeAndArtwork: chrome path succeeded, isLiked=\(r.isLiked)")
             return r
         }
-        log("fetchLikeAndArtwork: chrome path failed, trying Python script")
+        log("fetchLikeAndArtwork: chrome path failed")
 
-        // 2. Python script fallback (same playwright approach as the prototype)
-        if let liked = await pythonScript(action: "status") {
-            log("fetchLikeAndArtwork: Python script returned isLiked=\(liked)")
-            return LikeResult(isLiked: liked, artworkURL: nil)
+        // 2. OAuth API (if user configured it in Settings)
+        if let r = await oauthFetchLike(trackId: trackId) {
+            log("fetchLikeAndArtwork: OAuth path succeeded, isLiked=\(r.isLiked)")
+            return r
+        }
+
+        // 3. WKWebView with Chrome cookies (matches Python's playwright fallback)
+        log("fetchLikeAndArtwork: trying WKWebView")
+        if let isLiked = await SpotifyWebController.shared.read(trackId: trackId) {
+            log("fetchLikeAndArtwork: WKWebView returned isLiked=\(isLiked)")
+            return LikeResult(isLiked: isLiked, artworkURL: nil)
         }
         log("fetchLikeAndArtwork: all paths failed")
         return nil
@@ -57,16 +70,68 @@ final class SpotifyLikeService {
             log("setLike: chrome path succeeded, actual=\(r)")
             return r
         }
-        log("setLike: chrome path failed, trying Python script")
+        log("setLike: chrome path failed")
 
-        // 2. Python script (handles reconciliation internally: only clicks if state differs)
-        let action = wantLiked ? "like" : "unlike"
-        if let result = await pythonScript(action: action) {
-            log("setLike: Python script returned \(result)")
+        // 2. OAuth API (if configured)
+        if let r = await oauthSetLike(trackId: trackId, wantLiked: wantLiked) {
+            log("setLike: OAuth path succeeded, actual=\(r)")
+            return r
+        }
+
+        // 3. WKWebView (handles reconciliation internally: only clicks if state differs)
+        log("setLike: trying WKWebView")
+        if let result = await SpotifyWebController.shared.setLike(trackId: trackId,
+                                                                    wantLiked: wantLiked) {
+            log("setLike: WKWebView returned \(result)")
             return result
         }
         log("setLike: all paths failed")
         return nil
+    }
+
+    // MARK: - OAuth API (optional, only when user configured it)
+
+    private func oauthFetchLike(trackId: String) async -> LikeResult? {
+        guard let auth = authService, auth.isConnected else { return nil }
+        guard let token = await auth.getValidToken() else {
+            log("OAuth: connected but token unavailable")
+            return nil
+        }
+        var req = URLRequest(url: URL(string: "https://api.spotify.com/v1/me/tracks/contains?ids=\(trackId)")!)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let flags = try? JSONSerialization.jsonObject(with: data) as? [Bool],
+              let isLiked = flags.first else {
+            log("OAuth: fetch request failed (status=\(((try? await URLSession.shared.data(for: req).1) as? HTTPURLResponse)?.statusCode ?? -1))")
+            return nil
+        }
+        return LikeResult(isLiked: isLiked, artworkURL: nil)
+    }
+
+    private func oauthSetLike(trackId: String, wantLiked: Bool) async -> Bool? {
+        guard let auth = authService, auth.isConnected else { return nil }
+        guard let token = await auth.getValidToken() else { return nil }
+
+        // Read actual state first (reconciliation)
+        var checkReq = URLRequest(url: URL(string: "https://api.spotify.com/v1/me/tracks/contains?ids=\(trackId)")!)
+        checkReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (checkData, _) = try? await URLSession.shared.data(for: checkReq),
+              let flags = try? JSONSerialization.jsonObject(with: checkData) as? [Bool],
+              let current = flags.first else { return nil }
+        if current == wantLiked { return current }
+
+        var mutReq = URLRequest(url: URL(string: "https://api.spotify.com/v1/me/tracks")!)
+        mutReq.httpMethod = wantLiked ? "PUT" : "DELETE"
+        mutReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        mutReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        mutReq.httpBody = try? JSONSerialization.data(withJSONObject: ["ids": [trackId]])
+        guard let (_, mutResp) = try? await URLSession.shared.data(for: mutReq),
+              (200...299).contains((mutResp as? HTTPURLResponse)?.statusCode ?? 0) else {
+            log("OAuth: mutation request failed")
+            return nil
+        }
+        return wantLiked
     }
 
     // MARK: - Chrome AppleScript fast path
@@ -77,14 +142,10 @@ final class SpotifyLikeService {
             log("chrome: no tab found or Chrome not running")
             return nil
         }
-        log("chrome: raw result='\(raw)'")
+        log("chrome: raw result='\(raw.prefix(120))'")
         let parts = raw.components(separatedBy: "\t")
-        guard parts.count >= 2, !parts[0].hasPrefix("ERROR:"), !parts[0].isEmpty else {
-            log("chrome: parse failed, parts=\(parts)")
-            return nil
-        }
-        guard let liked = parseLikedState(label: parts[0], checked: parts[1]) else {
-            log("chrome: could not determine liked from label='\(parts[0])' checked='\(parts[1])'")
+        guard parts.count >= 2, !parts[0].hasPrefix("ERROR:"), !parts[0].isEmpty,
+              let liked = parseLikedState(label: parts[0], checked: parts[1]) else {
             return nil
         }
         let artURL = parts.count >= 3 && !parts[2].isEmpty ? parts[2] : nil
@@ -92,20 +153,16 @@ final class SpotifyLikeService {
     }
 
     private func chromeSetLike(trackId: String, wantLiked: Bool) async -> Bool? {
-        guard let rawRead = await injectJSInChrome(trackId: trackId, js: readJS) else { return nil }
-        log("chrome: read raw='\(rawRead)'")
-        guard let current = parseLikedFromRaw(rawRead) else { return nil }
-
-        if current == wantLiked {
-            log("chrome: already in desired state \(current), no click needed")
-            return current
+        guard let rawRead = await injectJSInChrome(trackId: trackId, js: readJS) else {
+            return nil
         }
+        guard let current = parseLikedFromRaw(rawRead) else { return nil }
+        if current == wantLiked { return current }
 
         if let rawClick = await injectJSInChrome(trackId: trackId, js: clickJS),
            let afterClick = parseLikedFromRaw(rawClick) {
             return afterClick
         }
-        // Re-read if click result was ambiguous
         if let rawReread = await injectJSInChrome(trackId: trackId, js: readJS) {
             return parseLikedFromRaw(rawReread)
         }
@@ -135,8 +192,7 @@ final class SpotifyLikeService {
         end tell
         return ""
         """
-        let result = await runOsascript(script)
-        guard let r = result, !r.isEmpty else { return nil }
+        guard let r = await runOsascript(script), !r.isEmpty else { return nil }
         return r
     }
 
@@ -195,94 +251,6 @@ final class SpotifyLikeService {
         return nil
     }
 
-    // MARK: - Python script subprocess
-
-    // The Python script lives at <repo_root>/prototypes/spotify_liked.py.
-    // The binary is at <repo_root>/macos/.build/{debug,release}/SpotifyController,
-    // so the repo root is 4 path components up from the binary.
-    private func findPythonAndScript() -> (python: String, script: String)? {
-        guard let execURL = Bundle.main.executableURL else {
-            log("python: Bundle.main.executableURL is nil")
-            return nil
-        }
-        log("python: binary at \(execURL.path)")
-
-        // Walk up from the binary until we find prototypes/spotify_liked.py
-        var candidate = execURL
-        for _ in 0..<8 {
-            candidate = candidate.deletingLastPathComponent()
-            let scriptURL = candidate.appendingPathComponent("prototypes/spotify_liked.py")
-            if FileManager.default.fileExists(atPath: scriptURL.path) {
-                let venvPython = candidate.appendingPathComponent(".venv/bin/python3").path
-                let python = FileManager.default.fileExists(atPath: venvPython)
-                    ? venvPython
-                    : "/usr/bin/python3"
-                log("python: found script=\(scriptURL.path) python=\(python)")
-                return (python, scriptURL.path)
-            }
-        }
-        log("python: script not found (searched up to 8 levels from binary)")
-        return nil
-    }
-
-    // Calls the Python script with the given action ("status", "like", "unlike").
-    // Returns true=liked, false=unliked, nil=error.
-    private func pythonScript(action: String) async -> Bool? {
-        guard let (python, script) = findPythonAndScript() else { return nil }
-
-        return await withCheckedContinuation { cont in
-            Task.detached(priority: .utility) { [self] in
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: python)
-                proc.arguments = action == "status" ? [script] : [script, action]
-                proc.currentDirectoryURL = URL(fileURLWithPath: script)
-                    .deletingLastPathComponent()
-
-                let outPipe = Pipe()
-                let errPipe = Pipe()
-                proc.standardOutput = outPipe
-                proc.standardError  = errPipe
-
-                do {
-                    try proc.run()
-                } catch {
-                    await MainActor.run { self.log("python: failed to launch: \(error)") }
-                    cont.resume(returning: nil)
-                    return
-                }
-
-                // 60 s timeout matches playwright's page.goto timeout in the Python script.
-                // A second detached task terminates the process if it runs too long.
-                let processRef = proc
-                let timeoutTask = Task.detached {
-                    try? await Task.sleep(nanoseconds: 60_000_000_000)
-                    if processRef.isRunning { processRef.terminate() }
-                }
-
-                proc.waitUntilExit()
-                timeoutTask.cancel()
-
-                if proc.terminationReason == .uncaughtSignal {
-                    await MainActor.run { self.log("python: terminated (timed out after 60s)") }
-                    cont.resume(returning: nil)
-                    return
-                }
-
-                let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                await MainActor.run {
-                    self.log("python: stdout='\(out)' stderr='\(err.prefix(200))'")
-                }
-
-                let result: Bool? = out == "yes" ? true : out == "no" ? false : nil
-                cont.resume(returning: result)
-            }
-        }
-    }
-
     // MARK: - Logging
 
     private func log(_ message: String) {
@@ -290,7 +258,7 @@ final class SpotifyLikeService {
     }
 }
 
-// MARK: - osascript helper (mirrors SpotifyBridge; scoped to this file only)
+// MARK: - osascript helper
 
 @discardableResult
 private func runOsascript(_ script: String) async -> String? {

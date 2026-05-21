@@ -29,9 +29,6 @@ struct PlayerPopoverView: View {
                 isHovering = hovering
             }
         }
-        .sheet(isPresented: $playback.showSettings) {
-            SettingsView()
-        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(controlsVisible ? "Now playing with controls" : "Now playing")
     }
@@ -88,7 +85,7 @@ struct PlayerPopoverView: View {
             Spacer()
 
             ControlIconButton(title: "Settings", size: PlayerTheme.cornerHitSize) {
-                playback.showSettings = true
+                SettingsWindowController.shared.show(authService: playback.authService)
             } label: {
                 Image(systemName: "gearshape")
                     .font(.system(size: PlayerTheme.utilityIconSize, weight: .medium))
