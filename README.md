@@ -57,6 +57,10 @@ The built app is located at `.build/release/Harmonic` (or `.build/debug/Harmonic
 
 The `prototypes/` directory contains experimental tools. See [prototypes/README.md](prototypes/README.md) for details.
 
+## Attribution
+
+App icon by <a href="https://www.flaticon.com/free-icons/lotus" title="lotus icons">Saifali496 - Flaticon</a>
+
 ## License
 
 MIT
