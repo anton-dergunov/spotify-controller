@@ -71,17 +71,25 @@ final class StatusBarController: NSObject {
     private func showContextMenu() {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(
+            title: "Settings…",
+            action: #selector(openSettings),
+            keyEquivalent: ","
+        ))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(
             title: "Quit Spotify Controller",
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         ))
-        // Temporarily set the menu so performClick shows it, then clear it
-        // so future left-clicks don't accidentally show a menu.
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         DispatchQueue.main.async { [weak self] in
             self?.statusItem.menu = nil
         }
+    }
+
+    @objc private func openSettings() {
+        SettingsWindowController.shared.show(authService: playback.authService)
     }
 
     // Called by the tap gesture in MenuBarItemView (left-click on track info area).

@@ -35,24 +35,19 @@ final class PlaybackViewModel: ObservableObject {
     // Increments whenever the user clicks the heart button. A background
     // fetchLikeStatus task captures this value when it starts, and refuses to
     // overwrite `isLiked` if the counter has moved (i.e. the user clicked since).
-    // Without this, slow web responses can clobber recent user clicks and the UI
-    // bounces or lands in the wrong state.
+    // Without this, slow web responses can clobber recent user clicks.
     private var likeActionVersion = 0
 
     private var displayTimer: AnyCancellable?
     private var positionSyncTimer: AnyCancellable?
+    private var authServiceCancellable: AnyCancellable?
 
     private var reportedPosition: TimeInterval = 0
     private var reportedAt = Date()
 
     private var artworkRequestID = 0
     private var loadedArtworkURL = ""
-    // Artwork URL obtained from the web (like-service fetch); used as step-2 fallback.
-    private var webArtworkURL = ""
     // Guards against fetching like status twice for the same track.
-    // The initial PlaybackStateChanged notification often carries an empty trackId;
-    // the follow-up fetchAndDispatchState() fills it 0.3 s later with trackChanged=false,
-    // so we must check here rather than only in the trackChanged branch.
     private var likeStatusFetched = false
 
     // MARK: - Init
@@ -60,9 +55,21 @@ final class PlaybackViewModel: ObservableObject {
     init() {
         likeService.authService = authService
         wireBridge()
+        // Forward authService changes so views observing this model update too.
+        authServiceCancellable = authService.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
         isSpotifyRunning = bridge.isRunning()
         if isSpotifyRunning {
             bridge.queryCurrentState()
+            // Belt-and-suspenders: if the first AppleScript query returned incomplete
+            // track info (Spotify occasionally needs a moment to surface metadata),
+            // retry once after a short delay. No-op when duration is already set.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard let self, self.isSpotifyRunning, self.duration == 0 else { return }
+                self.bridge.queryCurrentState()
+            }
         }
         startDisplayTimer()
         startPositionSyncTimer()
@@ -106,6 +113,7 @@ final class PlaybackViewModel: ObservableObject {
 
     func toggleLike() {
         guard !currentTrackId.isEmpty else { return }
+        guard authService.oauthEnabled && authService.isConnected else { return }
         let wantLiked = !isLiked
         isLiked = wantLiked
         likeActionVersion += 1
@@ -115,7 +123,6 @@ final class PlaybackViewModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             let actual = await likeService.setLike(trackId: trackId, wantLiked: wantLiked)
-            // If the user clicked again since this task started, ignore this result.
             guard self.likeActionVersion == myVersion else { return }
             if let actual = actual {
                 self.isLiked = actual
@@ -143,28 +150,32 @@ final class PlaybackViewModel: ObservableObject {
     }
 
     private func applyTrackInfo(_ info: SpotifyTrackInfo) {
+        // Always update numeric fields. This runs even when the AppleScript try-block
+        // fails and returns an empty name — it ensures `duration` is set so the timer
+        // can fire and `progressFraction` is non-zero.
+        if info.albumYear > 0 { albumYear = info.albumYear }
+        if info.duration  > 0 { duration  = info.duration  }
+
+        // Can't determine track identity without a name; leave text fields as-is.
+        guard !info.name.isEmpty else { return }
+
         let trackChanged = info.name != song || info.artist != artist
 
         song   = info.name
         artist = info.artist
         album  = info.album
-        if info.albumYear > 0 { albumYear = info.albumYear }
-        if info.duration  > 0 { duration  = info.duration  }
 
         if trackChanged {
-            currentTrackId   = info.trackId
-            isLiked          = false
+            currentTrackId    = info.trackId
+            isLiked           = false
             likeStatusFetched = false
-            webArtworkURL    = ""
-            loadedArtworkURL = info.artworkURL
-            coverImage       = nil
+            loadedArtworkURL  = info.artworkURL
+            coverImage        = nil
             startArtworkFetch(cdnURL: info.artworkURL, artist: info.artist, track: info.name)
         } else {
-            // Same track — update trackId if we just got it for the first time.
             if !info.trackId.isEmpty && currentTrackId.isEmpty {
                 currentTrackId = info.trackId
             }
-
             let urlChanged = !info.artworkURL.isEmpty && info.artworkURL != loadedArtworkURL
             if urlChanged {
                 loadedArtworkURL = info.artworkURL
@@ -172,66 +183,37 @@ final class PlaybackViewModel: ObservableObject {
             }
         }
 
-        // Fetch like status whenever we have a non-empty trackId and haven't fetched yet
-        // for this track. Covers both the trackChanged path and the delayed-trackId path.
         if !currentTrackId.isEmpty && !likeStatusFetched {
             likeStatusFetched = true
             fetchLikeStatus(trackId: currentTrackId)
         }
     }
 
-    // Fetch like status (and bonus web artwork URL) for the newly-playing track.
-    // Captures `likeActionVersion` so a slow web response can't overwrite a user
-    // click that happened during the fetch.
     private func fetchLikeStatus(trackId: String) {
         guard !trackId.isEmpty else { return }
         let versionAtStart = likeActionVersion
         Task { [weak self] in
             guard let self else { return }
-            guard let result = await likeService.fetchLikeAndArtwork(trackId: trackId) else { return }
+            guard let liked = await likeService.fetchLikedStatus(trackId: trackId) else { return }
             guard self.currentTrackId == trackId else { return }
-            // Only update isLiked if the user hasn't clicked the heart since this
-            // fetch started — otherwise we'd overwrite the user's intent.
             if self.likeActionVersion == versionAtStart {
-                self.isLiked = result.isLiked
-            }
-            if let url = result.artworkURL, !url.isEmpty {
-                self.webArtworkURL = url
-                if self.coverImage == nil {
-                    self.startArtworkFetch(
-                        cdnURL: self.loadedArtworkURL.isEmpty ? url : self.loadedArtworkURL,
-                        webFallbackURL: url,
-                        artist: self.artist,
-                        track: self.song)
-                }
+                self.isLiked = liked
             }
         }
     }
 
     private func startArtworkFetch(cdnURL: String, artist: String, track: String) {
-        startArtworkFetch(cdnURL: cdnURL, webFallbackURL: webArtworkURL, artist: artist, track: track)
-    }
-
-    private func startArtworkFetch(cdnURL: String, webFallbackURL: String, artist: String, track: String) {
         artworkRequestID += 1
         let id = artworkRequestID
 
         Task { [weak self] in
             guard let self else { return }
-
             var data: Data?
 
-            // 1. Spotify CDN URL (from AppleScript `artwork url of current track`).
             if !cdnURL.isEmpty {
                 data = await bridge.downloadArtwork(from: cdnURL)
             }
 
-            // 2. Web fallback URL obtained alongside the like-status fetch.
-            if data == nil, !webFallbackURL.isEmpty, webFallbackURL != cdnURL {
-                data = await bridge.downloadArtwork(from: webFallbackURL)
-            }
-
-            // 3. iTunes Search API — works for virtually all mainstream music.
             if data == nil {
                 data = await bridge.searchITunesArtwork(artist: artist, track: track)
             }
@@ -245,6 +227,7 @@ final class PlaybackViewModel: ObservableObject {
         switch state {
         case .playing(let position):
             isPlaying        = true
+            progress         = position  // set immediately so the scrubber is correct before the timer fires
             reportedPosition = position
             reportedAt       = Date()
         case .paused(let position):
@@ -259,19 +242,18 @@ final class PlaybackViewModel: ObservableObject {
     }
 
     private func resetToIdle() {
-        song             = ""
-        artist           = ""
-        album            = ""
-        albumYear        = 0
-        duration         = 0
-        progress         = 0
-        reportedPosition = 0
-        isPlaying        = false
+        song              = ""
+        artist            = ""
+        album             = ""
+        albumYear         = 0
+        duration          = 0
+        progress          = 0
+        reportedPosition  = 0
+        isPlaying         = false
         isLiked           = false
         likeStatusFetched = false
         coverImage        = nil
         loadedArtworkURL  = ""
-        webArtworkURL     = ""
         currentTrackId    = ""
     }
 

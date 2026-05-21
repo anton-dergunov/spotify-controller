@@ -5,31 +5,26 @@ import Foundation
 import Security
 import SwiftUI
 
-// Optional OAuth path for Spotify Web API. Fully configurable so you can use:
-//   • Spotica Menu's grandfathered credentials (client_id + client_secret +
-//     redirect_uri spoticamenu://oauth-callback/spotify), or
-//   • Any other pre-existing Spotify developer app you own, or
-//   • A new app with PKCE (no client_secret) — though this is unlikely to grant
-//     library-modify scopes since Spotify's Feb 2026 lockdown.
-//
-// PKCE is used when client_secret is empty; otherwise Authorization Code Grant.
-// ASWebAuthenticationSession intercepts the redirect by URL scheme, even if a
-// matching app (e.g. Spotica Menu) is installed.
+// Optional OAuth path for Spotify Web API (PKCE flow — no client secret required).
+// Credentials from any pre-existing Spotify developer app work here, e.g. Spotica Menu's
+// grandfathered app (client_id=c305b358e164433b9eed2b3671a3419a,
+// redirect_uri=spoticamenu://oauth-callback/spotify).
+// New apps since Feb 2026 cannot enable Web API scopes.
 @MainActor
 final class SpotifyAuthService: NSObject, ObservableObject {
 
-    // Persisted config (UserDefaults — these are non-secret, user-editable)
-    @AppStorage("spotify.oauth.clientId")     var clientId:     String = ""
-    @AppStorage("spotify.oauth.clientSecret") var clientSecret: String = ""
-    @AppStorage("spotify.oauth.redirectURI")  var redirectURI:  String = "spotifycontroller://callback"
-    @AppStorage("spotify.oauth.scopes")       var scopes:       String = "user-library-read user-library-modify"
+    @AppStorage("spotify.oauth.enabled")     var oauthEnabled: Bool   = false
+    @AppStorage("spotify.oauth.clientId")    var clientId:     String = ""
+    @AppStorage("spotify.oauth.redirectURI") var redirectURI:  String = "spotifycontroller://callback"
+
+    let scopes = "user-library-read user-library-modify"
 
     @Published var isConnected     = false
     @Published var isAuthenticating = false
     @Published var lastError:       String?
 
-    private var cachedToken:  String?
-    private var tokenExpiry:  Date = .distantPast
+    private var cachedToken: String?
+    private var tokenExpiry: Date = .distantPast
 
     override init() {
         super.init()
@@ -49,38 +44,31 @@ final class SpotifyAuthService: NSObject, ObservableObject {
     func authorize() async {
         guard !clientId.isEmpty else { lastError = "Client ID is required"; return }
         guard let scheme = callbackScheme(for: redirectURI) else {
-            lastError = "Could not parse scheme from redirect URI '\(redirectURI)'"
+            lastError = "Could not parse scheme from redirect URI"
             return
         }
         isAuthenticating = true
         lastError = nil
         defer { isAuthenticating = false }
 
-        let usePKCE  = clientSecret.isEmpty
-        let verifier = usePKCE ? generateCodeVerifier() : nil
+        let verifier = generateCodeVerifier()
 
         var comps = URLComponents(string: "https://accounts.spotify.com/authorize")!
-        var items: [URLQueryItem] = [
-            .init(name: "client_id",    value: clientId),
-            .init(name: "response_type", value: "code"),
-            .init(name: "redirect_uri",  value: redirectURI),
-            .init(name: "scope",         value: scopes),
+        comps.queryItems = [
+            .init(name: "client_id",            value: clientId),
+            .init(name: "response_type",         value: "code"),
+            .init(name: "redirect_uri",          value: redirectURI),
+            .init(name: "scope",                 value: scopes),
+            .init(name: "code_challenge_method", value: "S256"),
+            .init(name: "code_challenge",        value: codeChallenge(for: verifier)),
         ]
-        if usePKCE, let v = verifier {
-            items.append(.init(name: "code_challenge_method", value: "S256"))
-            items.append(.init(name: "code_challenge",        value: codeChallenge(for: v)))
-        }
-        comps.queryItems = items
         guard let authURL = comps.url else { lastError = "Could not build auth URL"; return }
-
-        NSLog("[SpotifyAuth] authorize url=%@ scheme=%@", authURL.absoluteString, scheme)
 
         let callbackURL: URL? = await withCheckedContinuation { cont in
             let session = ASWebAuthenticationSession(
                 url: authURL,
                 callbackURLScheme: scheme
-            ) { url, err in
-                if let err = err { NSLog("[SpotifyAuth] session error: %@", "\(err)") }
+            ) { url, _ in
                 cont.resume(returning: url)
             }
             session.presentationContextProvider = self
@@ -91,10 +79,9 @@ final class SpotifyAuthService: NSObject, ObservableObject {
         guard let callback = callbackURL else { lastError = "Auth cancelled"; return }
         guard let code = URLComponents(url: callback, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "code" })?.value else {
-            lastError = "No code in callback URL: \(callback)"
+            lastError = "No code in callback URL"
             return
         }
-        NSLog("[SpotifyAuth] got code, exchanging…")
         await exchangeCode(code, verifier: verifier)
     }
 
@@ -107,49 +94,41 @@ final class SpotifyAuthService: NSObject, ObservableObject {
         lastError = nil
     }
 
-    // MARK: - Token exchange / refresh
+    // MARK: - Token exchange / refresh (PKCE)
 
-    private func exchangeCode(_ code: String, verifier: String?) async {
+    private func exchangeCode(_ code: String, verifier: String) async {
         var req = URLRequest(url: URL(string: "https://accounts.spotify.com/api/token")!)
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        addBasicAuthIfNeeded(&req)
-
-        var params: [String: String] = [
-            "grant_type":   "authorization_code",
-            "code":         code,
-            "redirect_uri": redirectURI,
-        ]
-        if clientSecret.isEmpty {
-            params["client_id"]     = clientId
-            params["code_verifier"] = verifier ?? ""
-        }
-        req.httpBody = formEncode(params)
+        req.httpBody = formEncode([
+            "grant_type":    "authorization_code",
+            "code":          code,
+            "redirect_uri":  redirectURI,
+            "client_id":     clientId,
+            "code_verifier": verifier,
+        ])
 
         guard let (data, resp) = try? await URLSession.shared.data(for: req) else {
-            lastError = "Token exchange network failure"
+            lastError = "Network error during token exchange"
             return
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             lastError = "Could not parse token response"
-            NSLog("[SpotifyAuth] exchange resp body: %@", String(data: data, encoding: .utf8) ?? "<binary>")
             return
         }
         if let err = json["error"] as? String {
             let desc = json["error_description"] as? String ?? ""
-            lastError = "Spotify: \(err) — \(desc)"
-            NSLog("[SpotifyAuth] exchange error: %@", lastError ?? "")
+            lastError = "Spotify error: \(err)\(desc.isEmpty ? "" : " — \(desc)")"
             return
         }
-        guard let access = json["access_token"] as? String,
+        guard let access  = json["access_token"]  as? String,
               let refresh = json["refresh_token"] as? String else {
-            lastError = "Missing access_token / refresh_token. status=\((resp as? HTTPURLResponse)?.statusCode ?? 0)"
+            lastError = "Missing tokens in response (HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 0))"
             return
         }
         storeTokens(access: access, refresh: refresh,
                     expiresIn: json["expires_in"] as? TimeInterval ?? 3600)
         isConnected = true
-        NSLog("[SpotifyAuth] exchange OK, isConnected=true")
     }
 
     private func refreshAccessToken() async -> String? {
@@ -161,16 +140,15 @@ final class SpotifyAuthService: NSObject, ObservableObject {
         var req = URLRequest(url: URL(string: "https://accounts.spotify.com/api/token")!)
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        addBasicAuthIfNeeded(&req)
-
-        var params = ["grant_type": "refresh_token", "refresh_token": refresh]
-        if clientSecret.isEmpty { params["client_id"] = clientId }
-        req.httpBody = formEncode(params)
+        req.httpBody = formEncode([
+            "grant_type":    "refresh_token",
+            "refresh_token": refresh,
+            "client_id":     clientId,
+        ])
 
         guard let (data, _) = try? await URLSession.shared.data(for: req),
               let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let access = json["access_token"] as? String else {
-            NSLog("[SpotifyAuth] refresh failed")
             isConnected = false
             return nil
         }
@@ -188,22 +166,10 @@ final class SpotifyAuthService: NSObject, ObservableObject {
         saveToKeychain(value: refresh, key: "refreshToken")
     }
 
-    private func addBasicAuthIfNeeded(_ req: inout URLRequest) {
-        guard !clientSecret.isEmpty else { return }
-        let creds = "\(clientId):\(clientSecret)"
-        if let data = creds.data(using: .utf8) {
-            req.setValue("Basic \(data.base64EncodedString())", forHTTPHeaderField: "Authorization")
-        }
-    }
-
     // MARK: - Helpers
 
-    private func callbackScheme(for redirectURI: String) -> String? {
-        // ASWebAuthenticationSession needs just the scheme (not the full URI).
-        // Example: "spoticamenu://oauth-callback/spotify" → "spoticamenu"
-        guard let url = URL(string: redirectURI), let scheme = url.scheme, !scheme.isEmpty else {
-            return nil
-        }
+    private func callbackScheme(for uri: String) -> String? {
+        guard let url = URL(string: uri), let scheme = url.scheme, !scheme.isEmpty else { return nil }
         return scheme
     }
 
@@ -233,8 +199,7 @@ final class SpotifyAuthService: NSObject, ObservableObject {
                                  kSecAttrService as String: "SpotifyController",
                                  kSecAttrAccount as String: key]
         SecItemDelete(q as CFDictionary)
-        var add = q
-        add[kSecValueData as String] = data
+        var add = q; add[kSecValueData as String] = data
         SecItemAdd(add as CFDictionary, nil)
     }
 

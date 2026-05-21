@@ -181,16 +181,17 @@ final class SpotifyBridge: NSObject, @unchecked Sendable {
         case "Paused":  state = .paused(position: position)
         default:        state = .stopped
         }
+        // Dispatch track info first so duration is available before applyPlayerState runs.
+        onTrackChanged?(SpotifyTrackInfo(
+            name: name, artist: artist, album: album,
+            albumYear: 0,
+            duration: durationMs / 1000.0,
+            artworkURL: "",  // follow-up query provides the URL
+            trackId: trackId
+        ))
         onStateChanged?(state)
 
         if !name.isEmpty {
-            onTrackChanged?(SpotifyTrackInfo(
-                name: name, artist: artist, album: album,
-                albumYear: 0,
-                duration: durationMs / 1000.0,
-                artworkURL: "",  // follow-up query provides the URL
-                trackId: trackId
-            ))
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 await self?.fetchAndDispatchState()
@@ -266,14 +267,15 @@ final class SpotifyBridge: NSObject, @unchecked Sendable {
         default:        state = .stopped
         }
 
+        // Always dispatch track info first — even with an empty name — so `applyTrackInfo`
+        // can update `duration` before `applyPlayerState` runs. Without this, a failed
+        // AppleScript try-block leaves `duration = 0` and the progress timer never fires.
+        onTrackChanged?(SpotifyTrackInfo(
+            name: name, artist: artist, album: album,
+            albumYear: year, duration: duration, artworkURL: artURL,
+            trackId: trackId
+        ))
         onStateChanged?(state)
-        if !name.isEmpty {
-            onTrackChanged?(SpotifyTrackInfo(
-                name: name, artist: artist, album: album,
-                albumYear: year, duration: duration, artworkURL: artURL,
-                trackId: trackId
-            ))
-        }
     }
 
     private func run(_ script: String) {

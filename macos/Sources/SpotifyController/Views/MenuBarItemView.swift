@@ -4,6 +4,9 @@ struct MenuBarItemView: View {
     @EnvironmentObject private var playback: PlaybackViewModel
     let onOpenWindow: () -> Void
 
+    @GestureState private var skipPressed = false
+    @GestureState private var likePressed = false
+
     var body: some View {
         if playback.isSpotifyRunning {
             trackInfoView
@@ -15,8 +18,6 @@ struct MenuBarItemView: View {
     // MARK: - Spotify not running
 
     private var notRunningView: some View {
-        // speaker.zzz.fill = "the speaker is sleeping" — funny, music-related,
-        // and immediately clear that something audio-adjacent is inactive.
         Image(systemName: "speaker.zzz.fill")
             .font(.system(size: 13, weight: .medium))
             .foregroundStyle(Color(nsColor: .labelColor))
@@ -30,7 +31,8 @@ struct MenuBarItemView: View {
     // MARK: - Spotify running
 
     private var trackInfoView: some View {
-        HStack(spacing: 0) {
+        let oauthAvailable = playback.authService.oauthEnabled && playback.authService.isConnected
+        return HStack(spacing: 0) {
             // Track info column: fills remaining width, full-height tap area.
             VStack(spacing: 1) {
                 Text(playback.artist.isEmpty ? "Spotify" : playback.artist)
@@ -50,29 +52,40 @@ struct MenuBarItemView: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: onOpenWindow)
 
-            // Skip column: 28 pt wide, full bar height.
-            // Using Image + onTapGesture (not Button) so that contentShape(Rectangle())
-            // reliably covers the whole strip, not just the icon's rendered pixels.
+            // Skip column: 28 pt wide, spring press animation.
             Image(systemName: "forward.end.fill")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(Color(nsColor: .labelColor))
+                .scaleEffect(skipPressed ? 0.75 : 1.0)
+                .opacity(skipPressed ? 0.7 : 1.0)
+                .animation(.spring(response: 0.2, dampingFraction: 0.6), value: skipPressed)
                 .frame(maxHeight: .infinity)
                 .frame(width: 28)
                 .contentShape(Rectangle())
-                .onTapGesture { playback.skipForward() }
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .updating($skipPressed) { _, state, _ in state = true }
+                        .onEnded { _ in playback.skipForward() }
+                )
                 .accessibilityLabel("Next track")
                 .accessibilityAddTraits(.isButton)
 
-            // Like column: 28 pt wide, full bar height.
-            // Liked state shows a solid white heart.
-            Image(systemName: playback.isLiked ? "heart.fill" : "heart")
+            // Like column: 28 pt wide, spring press animation.
+            Image(systemName: oauthAvailable ? (playback.isLiked ? "heart.fill" : "heart") : "heart.slash")
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(playback.isLiked ? Color.white : Color(nsColor: .labelColor))
+                .foregroundStyle(playback.isLiked && oauthAvailable ? Color.white : Color(nsColor: .labelColor))
+                .opacity(oauthAvailable ? (likePressed ? 0.7 : 1.0) : 0.4)
+                .scaleEffect(likePressed ? 0.75 : 1.0)
+                .animation(.spring(response: 0.2, dampingFraction: 0.6), value: likePressed)
                 .frame(maxHeight: .infinity)
                 .frame(width: 28)
                 .contentShape(Rectangle())
-                .onTapGesture { playback.toggleLike() }
-                .accessibilityLabel(playback.isLiked ? "Unlike" : "Like")
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .updating($likePressed) { _, state, _ in state = true }
+                        .onEnded { _ in if oauthAvailable { playback.toggleLike() } }
+                )
+                .accessibilityLabel(oauthAvailable ? (playback.isLiked ? "Unlike" : "Like") : "Like unavailable")
                 .accessibilityAddTraits(.isButton)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

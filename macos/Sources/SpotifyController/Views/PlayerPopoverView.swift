@@ -3,8 +3,13 @@ import SwiftUI
 struct PlayerPopoverView: View {
     @EnvironmentObject private var playback: PlaybackViewModel
     @State private var isHovering = false
+    @State private var heartScale: CGFloat = 1.0
 
     private var controlsVisible: Bool { isHovering }
+
+    private var oauthAvailable: Bool {
+        playback.authService.oauthEnabled && playback.authService.isConnected
+    }
 
     var body: some View {
         ZStack {
@@ -29,6 +34,14 @@ struct PlayerPopoverView: View {
                 isHovering = hovering
             }
         }
+        .onChange(of: playback.isLiked, perform: { newValue in
+            guard newValue, oauthAvailable else { return }
+            withAnimation(.spring(response: 0.15, dampingFraction: 0.3)) { heartScale = 1.4 }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { heartScale = 1.0 }
+            }
+        })
         .accessibilityElement(children: .contain)
         .accessibilityLabel(controlsVisible ? "Now playing with controls" : "Now playing")
     }
@@ -72,14 +85,20 @@ struct PlayerPopoverView: View {
     private var topBar: some View {
         HStack {
             ControlIconButton(
-                title: playback.isLiked ? "Remove from Liked Songs" : "Save to Liked Songs",
+                title: oauthAvailable
+                    ? (playback.isLiked ? "Remove from Liked Songs" : "Save to Liked Songs")
+                    : "Like unavailable — connect in Settings",
                 size: PlayerTheme.cornerHitSize
             ) {
-                playback.toggleLike()
+                if oauthAvailable { playback.toggleLike() }
             } label: {
-                Image(systemName: playback.isLiked ? "heart.fill" : "heart")
+                Image(systemName: oauthAvailable
+                      ? (playback.isLiked ? "heart.fill" : "heart")
+                      : "heart.slash")
                     .font(.system(size: PlayerTheme.utilityIconSize, weight: .medium))
                     .foregroundStyle(PlayerTheme.controlForeground)
+                    .scaleEffect(heartScale)
+                    .opacity(oauthAvailable ? 1.0 : 0.45)
             }
 
             Spacer()
@@ -156,7 +175,7 @@ struct PlayerPopoverView: View {
                 }
                 .frame(width: PlayerTheme.playButtonSize, height: PlayerTheme.playButtonSize)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(SpringyButtonStyle(scale: 0.88))
             .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
 
             Spacer()
@@ -198,6 +217,21 @@ struct PlayerPopoverView: View {
     }
 }
 
+// MARK: - SpringyButtonStyle
+
+private struct SpringyButtonStyle: ButtonStyle {
+    var scale: CGFloat = 0.82
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? scale : 1)
+            .opacity(configuration.isPressed ? 0.75 : 1)
+            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
+
+// MARK: - CoverImageView
+
 private struct CoverImageView: View {
     let image: NSImage?
 
@@ -220,6 +254,8 @@ private struct CoverImageView: View {
     }
 }
 
+// MARK: - ControlIconButton
+
 private struct ControlIconButton<Label: View>: View {
     let title: String
     let size: CGFloat
@@ -232,10 +268,12 @@ private struct ControlIconButton<Label: View>: View {
                 .frame(width: size, height: size)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SpringyButtonStyle())
         .accessibilityLabel(title)
     }
 }
+
+// MARK: - PlaybackScrubber
 
 private struct PlaybackScrubber: View {
     let fraction: Double
