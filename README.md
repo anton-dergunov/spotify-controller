@@ -2,7 +2,9 @@
 
 A minimal, distraction-free Spotify playback controller for macOS. Control your music directly from the menu bar — no clutter, just the essentials.
 
-![Harmonic App Demo](assets/app.png)
+<p align="center">
+  <img src="assets/app.jpg" width="315" alt="Harmonic App Demo">
+</p>
 
 ## Features
 
