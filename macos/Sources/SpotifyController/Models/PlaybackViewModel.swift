@@ -42,9 +42,6 @@ final class PlaybackViewModel: ObservableObject {
     private var positionSyncTimer: AnyCancellable?
     private var authServiceCancellable: AnyCancellable?
 
-    private var reportedPosition: TimeInterval = 0
-    private var reportedAt = Date()
-
     private var artworkRequestID = 0
     private var loadedArtworkURL = ""
     // Guards against fetching like status twice for the same track.
@@ -62,14 +59,6 @@ final class PlaybackViewModel: ObservableObject {
         isSpotifyRunning = bridge.isRunning()
         if isSpotifyRunning {
             bridge.queryCurrentState()
-            // Belt-and-suspenders: if the first AppleScript query returned incomplete
-            // track info (Spotify occasionally needs a moment to surface metadata),
-            // retry once after a short delay. No-op when duration is already set.
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                guard let self, self.isSpotifyRunning, self.duration == 0 else { return }
-                self.bridge.queryCurrentState()
-            }
         }
         startDisplayTimer()
         startPositionSyncTimer()
@@ -91,11 +80,9 @@ final class PlaybackViewModel: ObservableObject {
     func togglePlayPause() {
         if isPlaying {
             bridge.pause()
-            reportedPosition = progress
             isPlaying = false
         } else {
             bridge.play()
-            reportedAt = Date()
             isPlaying = true
         }
     }
@@ -105,9 +92,7 @@ final class PlaybackViewModel: ObservableObject {
 
     func seek(fraction: Double) {
         let target = duration * min(1, max(0, fraction))
-        progress         = target
-        reportedPosition = target
-        reportedAt       = Date()
+        progress = target
         bridge.seek(to: target)
     }
 
@@ -150,9 +135,7 @@ final class PlaybackViewModel: ObservableObject {
     }
 
     private func applyTrackInfo(_ info: SpotifyTrackInfo) {
-        // Always update numeric fields. This runs even when the AppleScript try-block
-        // fails and returns an empty name — it ensures `duration` is set so the timer
-        // can fire and `progressFraction` is non-zero.
+        NSLog("[PlaybackViewModel] applyTrackInfo: name=%@ duration=%.1f", info.name, info.duration)
         if info.albumYear > 0 { albumYear = info.albumYear }
         if info.duration  > 0 { duration  = info.duration  }
 
@@ -224,20 +207,17 @@ final class PlaybackViewModel: ObservableObject {
     }
 
     private func applyPlayerState(_ state: SpotifyPlayerState) {
+        NSLog("[PlaybackViewModel] applyPlayerState: %@", "\(state)")
         switch state {
         case .playing(let position):
-            isPlaying        = true
-            progress         = position  // set immediately so the scrubber is correct before the timer fires
-            reportedPosition = position
-            reportedAt       = Date()
+            isPlaying = true
+            progress  = position
         case .paused(let position):
-            isPlaying        = false
-            progress         = position
-            reportedPosition = position
+            isPlaying = false
+            progress  = position
         case .stopped:
-            isPlaying        = false
-            progress         = 0
-            reportedPosition = 0
+            isPlaying = false
+            progress  = 0
         }
     }
 
@@ -248,7 +228,6 @@ final class PlaybackViewModel: ObservableObject {
         albumYear         = 0
         duration          = 0
         progress          = 0
-        reportedPosition  = 0
         isPlaying         = false
         isLiked           = false
         likeStatusFetched = false
@@ -261,9 +240,12 @@ final class PlaybackViewModel: ObservableObject {
         displayTimer = Timer.publish(every: 1, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
-                guard let self, isPlaying, duration > 0 else { return }
-                let elapsed = Date().timeIntervalSince(reportedAt)
-                progress = min(duration, reportedPosition + elapsed)
+                guard let self, isPlaying else { return }
+                if duration <= 0 || progress < duration {
+                    progress += 1
+                } else {
+                    progress = 0
+                }
             }
     }
 
@@ -275,8 +257,7 @@ final class PlaybackViewModel: ObservableObject {
                 Task { [weak self] in
                     guard let self else { return }
                     if let pos = await bridge.queryPosition() {
-                        reportedPosition = pos
-                        reportedAt       = Date()
+                        self.progress = pos
                     }
                 }
             }

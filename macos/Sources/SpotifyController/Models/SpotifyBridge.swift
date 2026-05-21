@@ -203,6 +203,8 @@ final class SpotifyBridge: NSObject, @unchecked Sendable {
     // so callbacks can be called directly without DispatchQueue.main.async.
     @MainActor
     private func fetchAndDispatchState() async {
+        // Each property in its own try block so a failure on one (e.g. year)
+        // does not prevent the others (especially duration) from being read.
         let script = """
         tell application "Spotify"
             if it is running then
@@ -219,9 +221,15 @@ final class SpotifyBridge: NSObject, @unchecked Sendable {
                     set n   to name   of current track
                     set ar  to artist of current track
                     set al  to album  of current track
-                    set yr  to (year     of current track) as string
-                    set dur to (duration of current track) as string
                     set uri to id of current track
+                on error
+                end try
+                try
+                    set yr to (year of current track) as string
+                on error
+                end try
+                try
+                    set dur to (duration of current track) as string
                 on error
                 end try
                 try
@@ -235,8 +243,12 @@ final class SpotifyBridge: NSObject, @unchecked Sendable {
         end tell
         """
 
-        guard let output = await osascript(script) else { return }
-        // After the await we are guaranteed to be on the main actor.
+        guard let output = await osascript(script) else {
+            NSLog("[SpotifyBridge] fetchAndDispatchState: AppleScript returned nil")
+            return
+        }
+
+        NSLog("[SpotifyBridge] raw output: %@", String(output.prefix(300)))
 
         if output == "not_running" {
             onRunningChanged?(false)
@@ -244,7 +256,10 @@ final class SpotifyBridge: NSObject, @unchecked Sendable {
         }
 
         let parts    = output.components(separatedBy: "\n")
-        guard parts.count >= 2 else { return }
+        guard parts.count >= 2 else {
+            NSLog("[SpotifyBridge] unexpected part count: %d", parts.count)
+            return
+        }
 
         let stateStr = parts[0]
         let position = Double(parts[1]) ?? 0
@@ -256,9 +271,11 @@ final class SpotifyBridge: NSObject, @unchecked Sendable {
         let artURL   = parts.count > 7 ? parts[7] : ""
         let rawURI   = parts.count > 8 ? parts[8] : ""
 
-        // Spotify AppleScript returns duration in seconds; guard against ms format.
-        let duration = rawDur > 10_000 ? rawDur / 1000.0 : rawDur
+        // Spotify AppleScript returns duration in milliseconds.
+        let duration = rawDur / 1000.0
         let trackId  = rawURI.components(separatedBy: ":").last ?? ""
+
+        NSLog("[SpotifyBridge] parsed: state=%@ pos=%.1f name=%@ rawDur=%.0f duration=%.1f", stateStr, position, name, rawDur, duration)
 
         let state: SpotifyPlayerState
         switch stateStr.lowercased() {
@@ -267,9 +284,6 @@ final class SpotifyBridge: NSObject, @unchecked Sendable {
         default:        state = .stopped
         }
 
-        // Always dispatch track info first — even with an empty name — so `applyTrackInfo`
-        // can update `duration` before `applyPlayerState` runs. Without this, a failed
-        // AppleScript try-block leaves `duration = 0` and the progress timer never fires.
         onTrackChanged?(SpotifyTrackInfo(
             name: name, artist: artist, album: album,
             albumYear: year, duration: duration, artworkURL: artURL,
