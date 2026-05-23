@@ -8,17 +8,21 @@ A minimal, distraction-free Spotify playback controller for macOS. Control your 
 
 ## Features
 
-- **Menu bar player** — Access Spotify controls directly from your macOS menu bar
-- **Quick controls** — Skip tracks, toggle like status, and view current track info at a glance
-- **Borderless popover** — Open a clean 300×300 pt player window with full controls
-- **Smart Spotify integration** — Uses Spotify's official Web API for reliable track management
-- **Minimal design** — Stays out of your way while giving you full control
+- **Menu bar track info** — See artist and song name at a glance without switching apps
+- **Like / unlike** — Save or remove the current track from your Liked Songs with one click
+- **Skip forward** — Jump ahead in a track directly from the menu bar
+- **Player window** — Click the track info to open a full player with cover art, scrub bar, and transport controls
+- **Customizable menu bar** — Choose which controls appear in the menu bar strip
+- **Keyboard shortcuts** — Global hotkeys to like/unlike (⌥L by default) and toggle the player window; all customizable in settings
+- **Launch at Login** — Start Harmonic automatically when you log in
+- **Open in Spotify** — Jump to the current track in the Spotify app from the player or right-click menu
+- **Song logging** — Optionally keep a local log of your listening history
 
 ## Installation
 
 ### Download and Install
 
-1. Download the latest `Harmonic-0.1.0.dmg` from [Releases](https://github.com/anton-dergunov/harmonic/releases)
+1. Download the latest `Harmonic-0.2.0.dmg` from [Releases](https://github.com/anton-dergunov/harmonic/releases)
 2. Double-click to mount the DMG
 3. Drag `Harmonic.app` to your Applications folder
 4. Launch from Applications or Spotlight
@@ -60,12 +64,6 @@ make clean      # Remove build artifacts
 ```
 
 The built app is located at `.build/release/Harmonic` (or `.build/debug/Harmonic` for debug builds).
-
-## Architecture
-
-- **SwiftUI menu bar app** — Real-time track info, transport controls, and like/unlike toggle
-- **Spotify OAuth 2.0** — Official authentication for secure API access
-- **System integration** — Runs as a background accessory app with no Dock icon
 
 ## Prototypes
 
