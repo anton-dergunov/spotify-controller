@@ -1,6 +1,14 @@
 import AppKit
 import SwiftUI
 
+// Drives the selected tab in SettingsView from outside the SwiftUI hierarchy.
+@MainActor
+final class SettingsRouter: ObservableObject {
+    static let shared = SettingsRouter()
+    @Published var selectedTab: SettingsView.Tab = .general
+    private init() {}
+}
+
 // Hosts SettingsView in a standard titled NSWindow.
 // Persisted across opens (`isReleasedWhenClosed = false`) so subsequent calls
 // just bring the existing window to the front.
@@ -13,11 +21,9 @@ final class SettingsWindowController: NSObject {
 
     private override init() { super.init() }
 
-    func show(authService: SpotifyAuthService) {
-        // Ensure the app is foregrounded so the window receives clicks.
-        // (Our app is .accessory; without activating, the window can appear
-        // but not capture key events properly.)
+    func show(authService: SpotifyAuthService, tab: SettingsView.Tab = .general) {
         NSApp.activate(ignoringOtherApps: true)
+        SettingsRouter.shared.selectedTab = tab
 
         if let win = window {
             win.makeKeyAndOrderFront(nil)
@@ -29,6 +35,7 @@ final class SettingsWindowController: NSObject {
             .environmentObject(MenuBarSettings.shared)
             .environmentObject(HotkeySettings.shared)
             .environmentObject(LoggingSettings.shared)
+            .environmentObject(SettingsRouter.shared)
 
         let hosting = NSHostingController(rootView: root)
         let win = NSWindow(contentViewController: hosting)

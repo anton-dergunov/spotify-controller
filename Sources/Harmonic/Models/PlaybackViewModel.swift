@@ -33,7 +33,7 @@ final class PlaybackViewModel: ObservableObject {
     private let logger = SongLogger()
     let authService = SpotifyAuthService()
 
-    private var currentTrackId = ""
+    private(set) var currentTrackId = ""
 
     // Increments whenever the user clicks the heart button. A background
     // fetchLikeStatus task captures this value when it starts, and refuses to
@@ -141,6 +141,12 @@ final class PlaybackViewModel: ObservableObject {
     }
 
     func launchSpotify() { bridge.launchSpotify() }
+
+    func openInSpotify() {
+        guard !currentTrackId.isEmpty,
+              let url = URL(string: "spotify:track:\(currentTrackId)") else { return }
+        NSWorkspace.shared.open(url)
+    }
 
     // MARK: - Private
 

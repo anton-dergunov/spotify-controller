@@ -85,10 +85,18 @@ final class StatusBarController: NSObject {
 
     private func showContextMenu() {
         let menu = NSMenu()
+
+        let openItem = NSMenuItem(title: "Open in Spotify", action: #selector(openInSpotify), keyEquivalent: "")
+        openItem.target = self
+        openItem.isEnabled = !playback.currentTrackId.isEmpty
+        menu.addItem(openItem)
+        menu.addItem(.separator())
+
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
         menu.addItem(.separator())
+
         menu.addItem(NSMenuItem(
             title: "Quit Harmonic",
             action: #selector(NSApplication.terminate(_:)),
@@ -99,6 +107,10 @@ final class StatusBarController: NSObject {
         DispatchQueue.main.async { [weak self] in
             self?.statusItem.menu = nil
         }
+    }
+
+    @objc private func openInSpotify() {
+        playback.openInSpotify()
     }
 
     @objc private func openSettings() {

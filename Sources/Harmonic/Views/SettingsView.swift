@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 
 struct SettingsView: View {
@@ -5,34 +6,37 @@ struct SettingsView: View {
     @EnvironmentObject private var menuBar: MenuBarSettings
     @EnvironmentObject private var hotkeys: HotkeySettings
     @EnvironmentObject private var logging: LoggingSettings
+    @EnvironmentObject private var router: SettingsRouter
 
-    private enum Tab: Hashable, CaseIterable {
-        case spotify, menuBar, shortcuts, logging
+    enum Tab: Hashable, CaseIterable {
+        case general, spotify, menuBar, shortcuts, logging, about
 
         var title: String {
             switch self {
+            case .general:   "General"
             case .spotify:   "Spotify"
             case .menuBar:   "Menu Bar"
             case .shortcuts: "Shortcuts"
             case .logging:   "Logging"
+            case .about:     "About"
             }
         }
 
         var icon: String {
             switch self {
+            case .general:   "gearshape"
             case .spotify:   "music.note.list"
             case .menuBar:   "menubar.rectangle"
             case .shortcuts: "keyboard"
             case .logging:   "doc.text"
+            case .about:     "info.circle"
             }
         }
     }
 
-    @State private var selectedTab: Tab = .spotify
-
     var body: some View {
         HStack(spacing: 0) {
-            List(Tab.allCases, id: \.self, selection: $selectedTab) { tab in
+            List(Tab.allCases, id: \.self, selection: $router.selectedTab) { tab in
                 Label(tab.title, systemImage: tab.icon)
             }
             .listStyle(.sidebar)
@@ -41,9 +45,13 @@ struct SettingsView: View {
             Divider()
 
             ScrollView {
-                detailContent
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(24)
+                if router.selectedTab == .about {
+                    AboutView()
+                } else {
+                    detailContent
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .padding(24)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -52,11 +60,44 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        switch selectedTab {
+        switch router.selectedTab {
+        case .general:   generalContent
         case .spotify:   spotifyContent
         case .menuBar:   menuBarContent
         case .shortcuts: shortcutsContent
         case .logging:   loggingContent
+        case .about:     EmptyView()
+        }
+    }
+
+    // MARK: - General tab
+
+    private var generalContent: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Toggle(isOn: Binding(
+                get: { SMAppService.mainApp.status == .enabled },
+                set: { enabled in
+                    do {
+                        if enabled {
+                            try SMAppService.mainApp.register()
+                        } else {
+                            try SMAppService.mainApp.unregister()
+                        }
+                    } catch {
+                        // Status reflects the actual state; toggle reverts on next render.
+                    }
+                }
+            )) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Launch at Login")
+                        .font(.headline)
+                    Text("Start Harmonic automatically when you log in to your Mac.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+            Spacer(minLength: 0)
         }
     }
 

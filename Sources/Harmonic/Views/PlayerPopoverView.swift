@@ -11,14 +11,18 @@ struct PlayerPopoverView: View {
 
     var body: some View {
         ZStack {
-            coverLayer
-            ZStack {
-                blurredCoverLayer
-                tintLayer
-                controlsLayer
+            if playback.song.isEmpty {
+                idleLayer
+            } else {
+                coverLayer
+                ZStack {
+                    blurredCoverLayer
+                    tintLayer
+                    controlsLayer
+                }
+                .opacity(controlsVisible ? 1 : 0)
+                .allowsHitTesting(controlsVisible)
             }
-            .opacity(controlsVisible ? 1 : 0)
-            .allowsHitTesting(controlsVisible)
         }
         .frame(width: PlayerTheme.popoverSize, height: PlayerTheme.popoverSize)
         .clipShape(RoundedRectangle(cornerRadius: PlayerTheme.cornerRadius, style: .continuous))
@@ -42,6 +46,21 @@ struct PlayerPopoverView: View {
         })
         .accessibilityElement(children: .contain)
         .accessibilityLabel(controlsVisible ? "Now playing with controls" : "Now playing")
+    }
+
+    @ViewBuilder
+    private var idleLayer: some View {
+        ZStack {
+            Color(white: 0.18)
+            VStack(spacing: 10) {
+                Image(systemName: "music.note")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.white.opacity(0.30))
+                Text("Nothing playing")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+        }
     }
 
     @ViewBuilder
@@ -99,6 +118,18 @@ struct PlayerPopoverView: View {
                     .modifier(ShakeEffect(animatableData: CGFloat(playback.likeShakeCount)))
                     .animation(.linear(duration: 0.4), value: playback.likeShakeCount)
                     .opacity(likeAvailable ? 1.0 : 0.45)
+            }
+
+            Spacer()
+
+            if !playback.currentTrackId.isEmpty {
+                ControlIconButton(title: "Open in Spotify", size: PlayerTheme.cornerHitSize) {
+                    playback.openInSpotify()
+                } label: {
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: PlayerTheme.utilityIconSize, weight: .medium))
+                        .foregroundStyle(PlayerTheme.controlForeground)
+                }
             }
 
             Spacer()

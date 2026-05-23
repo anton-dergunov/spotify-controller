@@ -50,6 +50,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <true/>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Harmonic uses AppleScript to read playback state and control Spotify.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026. All rights reserved.</string>
     <key>NSPrincipalClass</key>
