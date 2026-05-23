@@ -24,6 +24,9 @@ final class StatusBarController: NSObject {
         super.init()
         setupStatusItem()
         observeSpotifyRunningState()
+        HotkeySettings.shared.likeAction = { [weak self] in
+            self?.playback.toggleLike()
+        }
     }
 
     private func setupStatusItem() {

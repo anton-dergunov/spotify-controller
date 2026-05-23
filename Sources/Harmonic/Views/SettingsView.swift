@@ -3,21 +3,24 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var auth: SpotifyAuthService
     @EnvironmentObject private var menuBar: MenuBarSettings
+    @EnvironmentObject private var hotkeys: HotkeySettings
 
     private enum Tab: Hashable, CaseIterable {
-        case spotify, menuBar
+        case spotify, menuBar, shortcuts
 
         var title: String {
             switch self {
-            case .spotify: "Spotify"
-            case .menuBar: "Menu Bar"
+            case .spotify:   "Spotify"
+            case .menuBar:   "Menu Bar"
+            case .shortcuts: "Shortcuts"
             }
         }
 
         var icon: String {
             switch self {
-            case .spotify: "music.note.list"
-            case .menuBar: "menubar.rectangle"
+            case .spotify:   "music.note.list"
+            case .menuBar:   "menubar.rectangle"
+            case .shortcuts: "keyboard"
             }
         }
     }
@@ -47,8 +50,9 @@ struct SettingsView: View {
     @ViewBuilder
     private var detailContent: some View {
         switch selectedTab {
-        case .spotify: spotifyContent
-        case .menuBar: menuBarContent
+        case .spotify:   spotifyContent
+        case .menuBar:   menuBarContent
+        case .shortcuts: shortcutsContent
         }
     }
 
@@ -417,6 +421,55 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
         }
     }
+
+    // MARK: - Shortcuts tab
+
+    private var shortcutsContent: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            mediaKeysSection
+            Divider()
+            customShortcutsSection
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var mediaKeysSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeader(
+                title: "Playback",
+                subtitle: "Handled by media keys — no configuration needed."
+            )
+            mediaKeyRow("Previous",     icon: "backward.fill",  badge: "⏮")
+            mediaKeyRow("Play / Pause", icon: "playpause.fill", badge: "⏯")
+            mediaKeyRow("Next",         icon: "forward.fill",   badge: "⏭")
+        }
+    }
+
+    @ViewBuilder
+    private func mediaKeyRow(_ label: String, icon: String, badge: String) -> some View {
+        HStack {
+            Image(systemName: icon).foregroundStyle(.tertiary).frame(width: 18)
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            Text(badge).font(.title3).foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 1)
+    }
+
+    private var customShortcutsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Custom Shortcuts")
+            HStack(spacing: 8) {
+                Text("Like / Unlike")
+                    .frame(width: 86, alignment: .trailing)
+                    .foregroundStyle(.secondary)
+                KeyRecorderField(shortcut: $hotkeys.likeShortcut)
+                    .frame(width: 140, height: 22)
+            }
+        }
+    }
+
+    // MARK: - Visibility binding helper
 
     private func visibilityBinding(for element: MenuBarElement) -> Binding<Bool> {
         switch element {
