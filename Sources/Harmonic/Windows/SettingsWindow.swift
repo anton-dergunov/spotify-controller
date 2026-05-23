@@ -28,6 +28,7 @@ final class SettingsWindowController: NSObject {
             .environmentObject(authService)
             .environmentObject(MenuBarSettings.shared)
             .environmentObject(HotkeySettings.shared)
+            .environmentObject(LoggingSettings.shared)
 
         let hosting = NSHostingController(rootView: root)
         let win = NSWindow(contentViewController: hosting)
