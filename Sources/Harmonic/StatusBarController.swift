@@ -24,6 +24,7 @@ final class StatusBarController: NSObject {
         super.init()
         setupStatusItem()
         observeSpotifyRunningState()
+        startInactiveDisplayDimming()
         HotkeySettings.shared.likeAction = { [weak self] in
             self?.playback.toggleLike()
         }
@@ -56,6 +57,44 @@ final class StatusBarController: NSObject {
         button.action = #selector(handleButtonAction(_:))
         button.target = self
         button.sendAction(on: [.rightMouseUp])
+    }
+
+    // On the inactive display(s) of a multi-monitor setup, macOS keeps the real
+    // status item on the active display and shows a system bitmap "replicant" on
+    // every inactive one. That replicant is a full-colour snapshot of our custom
+    // SwiftUI view and does NOT receive the inactive-menu-bar dimming that plain
+    // template-image status items get, so it stays bright while every other app's
+    // item is greyed out. We dim it ourselves by lowering the replicant's alpha.
+    private func startInactiveDisplayDimming() {
+        dimInactiveDisplayReplicants()
+
+        // The replicant is recreated whenever the active display changes, resetting
+        // its alpha. Poll so we re-dim each freshly created replicant; the replicant
+        // only exists on inactive displays, so there is nothing to restore.
+        Timer.publish(every: 1.0, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.dimInactiveDisplayReplicants() }
+            .store(in: &cancellables)
+    }
+
+    private func dimInactiveDisplayReplicants() {
+        for window in NSApp.windows where window.isVisible {
+            guard let contentView = window.contentView,
+                  let replicant = findView(in: contentView, classNameContains: "ReplicantView"),
+                  replicant.alphaValue != Self.inactiveDisplayAlpha else { continue }
+            replicant.alphaValue = Self.inactiveDisplayAlpha
+        }
+    }
+
+    private static let inactiveDisplayAlpha: CGFloat = 0.5
+
+    /// Recursively find the first descendant whose class name contains `substring`.
+    private func findView(in view: NSView, classNameContains substring: String) -> NSView? {
+        for sub in view.subviews {
+            if "\(type(of: sub))".contains(substring) { return sub }
+            if let found = findView(in: sub, classNameContains: substring) { return found }
+        }
+        return nil
     }
 
     private func observeSpotifyRunningState() {
